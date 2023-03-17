@@ -8,9 +8,11 @@ import requests
 from dotenv import load_dotenv
 from exception import (
     ApiAnswerError,
-    InvalidTockenError,
-    NoElementList)
+    NoElementList,
+    RequestError,
+    SendMessageError)
 from http import HTTPStatus
+from requests import RequestException
 from telegram import TelegramError
 
 load_dotenv()
@@ -31,27 +33,31 @@ HOMEWORK_VERDICTS = {
 }
 
 
-def check_tokens() -> None:
+def check_tokens() -> bool:
     """
     Функция проверяет, доступны ли данные переменные.
     Если не доступны, выпадет исключение.
     """
-    if not (
-        PRACTICUM_TOKEN and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID
-    ):
-        logging.critical('Не все нужные переменные присутствуют.')
-        raise InvalidTockenError('Не все нужные переменные присутствуют.')
+    TOKENS = [
+        PRACTICUM_TOKEN,
+        TELEGRAM_TOKEN,
+        TELEGRAM_CHAT_ID
+    ]
+    return all(TOKENS)
 
 
 def send_message(bot, message) -> None:
     """Функция для отправки сообщений из бота."""
     try:
+        logging.debug('Готовимся отправить сообщение.')
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logging.debug('Сообщение успешно отправлено.')
     except TelegramError as error:
         logging.error(f'Упс, я не смог отправить сообщение. {error}')
-    else:
-        logging.debug('Сообщение успешно отправлено.')
+        # Почему то со строками raise TelegramError(...)
+        # и rasie RequstException(...) не проходит pytest
+        # Написала в raise свои классы исключений. Может так не верно.
+        raise SendMessageError(f'Упс, я не смог отправить сообщение. {error}')
 
 
 def get_api_answer(timestamp) -> dict:
@@ -66,8 +72,11 @@ def get_api_answer(timestamp) -> dict:
             logging.error('API Не отвечает.')
             raise ApiAnswerError('API Не отвечает.')
         return response.json()
-    except requests.exceptions.RequestException as error:
+    except RequestException as error:
         logging.error(f'Ошибка запроса к API {error}')
+        raise RequestError(
+            f'Ошибка запроса к API {error}'
+        )
 
 
 def check_response(response) -> dict:
@@ -75,12 +84,12 @@ def check_response(response) -> dict:
     Проверим, что ответ API соответствует документации.
     Обработаем возможные исключения.
     """
-    if type(response) != dict:
+    if not isinstance(response, dict):
         logging.error('Неверный тип ответа API.')
-        raise TypeError
-    if type(response.get('homeworks')) != list:
+        raise TypeError('Неверный тип ответа API.')
+    if not isinstance(response.get('homeworks'), list):
         logging.error('Неверный тип ответа homworks.')
-        raise TypeError
+        raise TypeError('Неверный тип ответа homworks.')
     return response
 
 
@@ -93,7 +102,7 @@ def parse_status(homework) -> str:
     homework_status = homework.get('status')
     if 'homework_name' not in homework:
         logging.error('Значение отсутсвует в списке homwork.')
-        raise NoElementList
+        raise NoElementList('Значение отсутсвует в списке homwork.')
     if homework_status not in HOMEWORK_VERDICTS:
         logging.error('Данный статус отсутствует в словаре.')
         raise KeyError('Нет такого ключа в словаре.')
@@ -103,14 +112,18 @@ def parse_status(homework) -> str:
 
 def main():
     """Основная логика работы бота."""
-    check_tokens()
+    if check_tokens() is False:
+        logging.critical('Не все нужные переменные присутствуют.')
+        exit()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     last_message = ''
     last_error = ''
 
+    # Я почему то нигде не вижу сообщений логов. Почему?
+    # Что не так? Чего не хватает?
     logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     handler = logging.StreamHandler(stream=sys.stdout)
     logger.addHandler(handler)
     while True:
@@ -120,12 +133,11 @@ def main():
             homework = check_response(response).get('homeworks')
             if homework:
                 message = parse_status(homework[0])
-                # Этот кусочек помоему не работает. На ревью проверю.
-                # Хочу сделать. Если можно, подскажи :)
                 if last_message != message:
                     send_message(bot, message)
                     last_message = message
                 else:
+                    # Else по прежнему почему то не работает.
                     send_message(bot, 'Статус не изменился')
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
