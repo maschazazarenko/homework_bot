@@ -21,7 +21,7 @@ PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-RETRY_PERIOD = 600
+RETRY_PERIOD = 3
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
@@ -38,12 +38,11 @@ def check_tokens() -> bool:
     Функция проверяет, доступны ли данные переменные.
     Если не доступны, выпадет исключение.
     """
-    TOKENS = [
+    return all([
         PRACTICUM_TOKEN,
         TELEGRAM_TOKEN,
-        TELEGRAM_CHAT_ID
-    ]
-    return all(TOKENS)
+        TELEGRAM_CHAT_ID]
+    )
 
 
 def send_message(bot, message) -> None:
@@ -54,9 +53,6 @@ def send_message(bot, message) -> None:
         logging.debug('Сообщение успешно отправлено.')
     except TelegramError as error:
         logging.error(f'Упс, я не смог отправить сообщение. {error}')
-        # Почему то со строками raise TelegramError(...)
-        # и rasie RequstException(...) не проходит pytest
-        # Написала в raise свои классы исключений. Может так не верно.
         raise SendMessageError(f'Упс, я не смог отправить сообщение. {error}')
 
 
@@ -120,25 +116,16 @@ def main():
     last_message = ''
     last_error = ''
 
-    # Я почему то нигде не вижу сообщений логов. Почему?
-    # Что не так? Чего не хватает?
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
-    handler = logging.StreamHandler(stream=sys.stdout)
-    logger.addHandler(handler)
     while True:
         try:
             response = get_api_answer(timestamp)
             timestamp = response.get('current_date')
-            homework = check_response(response).get('homeworks')
+            homework = check_response(response)
             if homework:
                 message = parse_status(homework[0])
                 if last_message != message:
                     send_message(bot, message)
                     last_message = message
-                else:
-                    # Else по прежнему почему то не работает.
-                    send_message(bot, 'Статус не изменился')
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
             if last_error != message:
@@ -149,4 +136,12 @@ def main():
 
 
 if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s, %(name)s, %(levelname)s, %(message)s',
+        handlers=[
+            logging.FileHandler("program.log", encoding='utf-8', mode='w'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
     main()
